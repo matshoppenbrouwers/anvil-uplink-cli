@@ -1,0 +1,177 @@
+"""Tests for config load/save/resolve_key."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from anvil_uplink_cli.config import (
+    DEFAULT_URL,
+    ENV_VAR_KEY,
+    Config,
+    Profile,
+    load_config,
+    resolve_key,
+    save_config,
+)
+from anvil_uplink_cli.errors import AuthError, ConfigError
+
+
+def test_profile_from_dict_defaults() -> None:
+    p = Profile.from_dict("alpha", {})
+    assert p.name == "alpha"
+    assert p.url == DEFAULT_URL
+    assert p.key_ref == ""
+    assert p.default is False
+
+
+def test_config_roundtrip(tmp_path: Path) -> None:
+    cfg = Config()
+    cfg.set_profile(Profile(name="a", url="wss://x/uplink", key_ref="env:A_KEY", default=True))
+    cfg.set_profile(Profile(name="b", key_ref="env:B_KEY"))
+    p = tmp_path / "config.toml"
+    save_config(cfg, p)
+    loaded = load_config(p)
+    assert set(loaded.profiles) == {"a", "b"}
+    assert loaded.profiles["a"].url == "wss://x/uplink"
+    assert loaded.profiles["a"].default is True
+    assert loaded.profiles["b"].default is False
+
+
+def test_config_get_default_when_exactly_one_default(tmp_path: Path) -> None:
+    cfg = Config()
+    cfg.set_profile(Profile(name="a", default=True))
+    cfg.set_profile(Profile(name="b"))
+    assert cfg.get(None).name == "a"
+
+
+def test_set_profile_demotes_previous_default() -> None:
+    cfg = Config()
+    cfg.set_profile(Profile(name="a", default=True))
+    cfg.set_profile(Profile(name="b", default=True))
+    assert cfg.profiles["a"].default is False
+    assert cfg.profiles["b"].default is True
+
+
+def test_config_get_single_profile_without_default_flag() -> None:
+    cfg = Config()
+    cfg.set_profile(Profile(name="only"))
+    assert cfg.get(None).name == "only"
+
+
+def test_config_get_unknown_profile_raises() -> None:
+    cfg = Config()
+    cfg.set_profile(Profile(name="a"))
+    with pytest.raises(ConfigError, match="not found"):
+        cfg.get("missing")
+
+
+def test_config_get_no_profiles_raises() -> None:
+    cfg = Config()
+    with pytest.raises(ConfigError, match="no profiles"):
+        cfg.get(None)
+
+
+def test_load_missing_file_returns_empty_config(tmp_path: Path) -> None:
+    cfg = load_config(tmp_path / "does-not-exist.toml")
+    assert cfg.profiles == {}
+
+
+def test_load_malformed_toml(tmp_path: Path) -> None:
+    p = tmp_path / "bad.toml"
+    p.write_text("not = valid = toml", encoding="utf-8")
+    with pytest.raises(ConfigError, match="invalid TOML"):
+        load_config(p)
+
+
+def test_resolve_key_explicit_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ENV_VAR_KEY, "from_env")
+    p = Profile(name="x", key_ref="env:OTHER")
+    assert resolve_key(p, explicit="boom") == "boom"
+
+
+def test_resolve_key_env_var_wins_over_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ENV_VAR_KEY, "from_env")
+    p = Profile(name="x", key_ref="env:OTHER")
+    assert resolve_key(p) == "from_env"
+
+
+def test_resolve_key_from_profile_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    monkeypatch.setenv("MY_KEY", "secret-value")
+    p = Profile(name="x", key_ref="env:MY_KEY")
+    assert resolve_key(p) == "secret-value"
+
+
+def test_resolve_key_missing_env_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    monkeypatch.delenv("MISSING", raising=False)
+    p = Profile(name="x", key_ref="env:MISSING")
+    with pytest.raises(AuthError, match="not set"):
+        resolve_key(p)
+
+
+def test_resolve_key_no_keyref_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    p = Profile(name="x", key_ref="")
+    with pytest.raises(AuthError, match="no key_ref"):
+        resolve_key(p)
+
+
+def test_resolve_key_unknown_scheme_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    p = Profile(name="x", key_ref="sshagent:foo")
+    with pytest.raises(AuthError, match="unknown key_ref scheme"):
+        resolve_key(p)
+
+
+def test_resolve_key_from_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("ANVIL_KEY=dotenv-secret\n")
+    p = Profile(name="x", key_ref=f"file:{env_file}:ANVIL_KEY")
+    assert resolve_key(p) == "dotenv-secret"
+
+
+def test_resolve_key_dotenv_missing_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    p = Profile(name="x", key_ref="file:/nope/.env:ANVIL_KEY")
+    with pytest.raises(AuthError, match="dotenv file not found"):
+        resolve_key(p)
+
+
+def test_resolve_key_from_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    import keyring
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.store: dict[tuple[str, str], str] = {}
+
+        def get_password(self, service: str, username: str) -> str | None:
+            return self.store.get((service, username))
+
+        def set_password(self, service: str, username: str, pwd: str) -> None:
+            self.store[(service, username)] = pwd
+
+        def delete_password(self, service: str, username: str) -> None:
+            self.store.pop((service, username), None)
+
+        priority = 1
+
+    fake = FakeBackend()
+    fake.set_password("anvil-bridge", "myapp", "keyring-secret")
+    monkeypatch.setattr(keyring, "get_password", fake.get_password)
+
+    p = Profile(name="x", key_ref="keyring:anvil-bridge/myapp")
+    assert resolve_key(p) == "keyring-secret"
+
+
+def test_resolve_key_keyring_empty_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    import keyring
+
+    monkeypatch.setattr(keyring, "get_password", lambda s, u: None)
+    p = Profile(name="x", key_ref="keyring:anvil-bridge/nothing")
+    with pytest.raises(AuthError, match="no key stored"):
+        resolve_key(p)
