@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anvil-uplink-cli"
+version = "0.1.0"
+description = "Terminal bridge to Anvil apps via the Server Uplink. Run diagnostics, query Data Tables, and call server functions from your shell or an AI coding assistant."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Mats Hoppenbrouwers" }]
+keywords = ["anvil", "uplink", "cli", "diagnostics", "data-tables"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "anvil-uplink==0.7.0",
+    "typer>=0.12",
+    "rich>=13",
+    "platformdirs>=4",
+    "keyring>=24",
+    "python-dotenv>=1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-mock>=3.12",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+anvil-bridge = "anvil_uplink_cli.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/matshoppenbrouwers/anvil-uplink-cli"
+Issues = "https://github.com/matshoppenbrouwers/anvil-uplink-cli/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anvil_uplink_cli"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",  # line length handled by formatter
+    "B008",  # typer uses function-call defaults for Option/Argument (canonical pattern)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
