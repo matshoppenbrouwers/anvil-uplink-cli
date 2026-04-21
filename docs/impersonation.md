@@ -150,7 +150,9 @@ ANVIL_UPLINK_KEY="server_XXXX..."
 ANVIL_UPLINK_SHARED_SECRET="<the openssl rand -hex 32 value>"
 ```
 
-The `dotenv:` scheme walks up from CWD to find this file, same as the uplink key. Both secrets share one trust boundary (the `.env`), so there's no new storage decision to make.
+The `dotenv:` scheme walks up from CWD to find this file (stopping at the repo root — `.git` / `pyproject.toml` / `setup.py` / `setup.cfg`), same as the uplink key. Both secrets share one trust boundary (the `.env`), so there's no new storage decision to make.
+
+**Confirm `.env` is in `.gitignore` before committing.** `anvil-bridge init` appends `.env` to `./.gitignore` automatically when the dotenv backend is chosen, but if you set up impersonation by editing `config.toml` manually (or append to a pre-existing `.env`), you need to verify this yourself. Committed secrets are assumed compromised — rotate the app's `anvil_uplink_shared_secret` immediately if that happens.
 
 ### Custom dispatcher name
 

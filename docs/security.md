@@ -32,10 +32,20 @@ Use Client Uplink for semi-trusted or user-owned contexts (an IoT device, a cust
 | `keyring:<service>/<name>` | OS keyring — macOS Keychain, Windows Credential Manager, Secret Service on Linux |
 | `env:<VAR>` | Environment variable (must be exported by your shell before running) |
 | `file:<path>:<VAR>` | Dotenv file — variable `VAR` in the file at `<path>` |
+| `dotenv:<VAR>` | Variable `VAR` in a `.env` found by walking up from CWD (recommended for agent workflows) |
 
-**Keyring is the default and strongly preferred.** The OS keyring keeps the key encrypted at rest and scoped to the current user session. `env:` and `file:` leave the key in plaintext somewhere; you are responsible for making sure those locations are protected.
+**Keyring is the default and strongly preferred.** The OS keyring keeps the key encrypted at rest and scoped to the current user session. `env:`, `file:`, and `dotenv:` leave the key in plaintext somewhere; you are responsible for making sure those locations are protected.
 
 When you choose the `dotenv` backend, `init` appends `.env` to `./.gitignore` automatically (if the `.env` lives inside your current working directory). If you move the file later, re-check your gitignore.
+
+### `dotenv:` walk boundary
+
+The `dotenv:` scheme walks from CWD toward the filesystem root and stops at the first of:
+
+- a `.env` file (used), or
+- a repo-root marker — `.git`, `pyproject.toml`, `setup.py`, or `setup.cfg` (walk stops, no `.env` used).
+
+This keeps secret resolution scoped to the current project, so a planted `.env` in a parent directory outside the repo cannot poison loading. If you see an "no .env found ... within the project boundary" error, either add a `.env` inside the project or switch that profile to `keyring:` / `env:` / `file:`.
 
 ## Key resolution order
 

@@ -373,6 +373,7 @@ def test_call_as_user_uses_custom_dispatcher_name(tmp_path, monkeypatch):
 
     def fake_call(fn_name, *args, **kwargs):
         captured["fn"] = fn_name
+        captured["args"] = args
         return "ok"
 
     import anvil.server
@@ -385,6 +386,9 @@ def test_call_as_user_uses_custom_dispatcher_name(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.stdout + result.stderr
     assert captured["fn"] == "my_shim"
+    # Argument order must match the server helper signature even when the
+    # dispatcher name is customized.
+    assert captured["args"] == ("shared-123", "svc@example.internal", "my_fn", [], {})
 
 
 def test_run_tolerates_utf8_bom(tmp_path, monkeypatch):

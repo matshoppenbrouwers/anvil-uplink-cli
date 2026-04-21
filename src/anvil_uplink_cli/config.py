@@ -21,6 +21,7 @@ The key ref scheme is:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import tomli_w
-from dotenv import dotenv_values, find_dotenv
+from dotenv import dotenv_values
 from platformdirs import user_config_dir
 
 # tomllib is stdlib in 3.11+, tomli is the backport for 3.10
@@ -44,6 +45,24 @@ ENV_VAR_KEY = "ANVIL_BRIDGE_KEY"
 CONFIG_FILENAME = "config.toml"
 KEYRING_SERVICE = "anvil-bridge"
 DEFAULT_IMPERSONATE_CALLABLE = "_uplink_run_as"
+# Python identifier — defends against config-file tampering routing --as-user
+# to an arbitrary callable name with separators, whitespace, or dotted paths.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class SecretStr(str):
+    """str that masks its value in `repr()`.
+
+    Used for resolved secrets (uplink key, impersonation shared secret) so
+    stray f-strings, logging calls, or traceback frames that capture the
+    object surface `"***"` instead of the plaintext value. Equality and
+    hashing still use the underlying string, so it drops into any code that
+    expects a `str`.
+    """
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "'***'" if self else "''"
 
 
 def config_path() -> Path:
@@ -62,25 +81,31 @@ class Profile:
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        d.pop("name", None)  # name is the table key, not a field
+        del d["name"]  # name is the table key, not a field
         # Elide defaulted optional fields so existing profiles round-trip cleanly.
-        if not d.get("impersonate_secret_ref"):
-            d.pop("impersonate_secret_ref", None)
-        if d.get("impersonate_callable") == DEFAULT_IMPERSONATE_CALLABLE:
-            d.pop("impersonate_callable", None)
+        if not d["impersonate_secret_ref"]:
+            del d["impersonate_secret_ref"]
+        if d["impersonate_callable"] == DEFAULT_IMPERSONATE_CALLABLE:
+            del d["impersonate_callable"]
         return d
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Profile:
+        impersonate_callable = str(
+            data.get("impersonate_callable", DEFAULT_IMPERSONATE_CALLABLE)
+        )
+        if not _IDENTIFIER_RE.match(impersonate_callable):
+            raise ConfigError(
+                f"profile '{name}' has invalid impersonate_callable "
+                f"'{impersonate_callable}' — must be a bare Python identifier"
+            )
         return cls(
             name=name,
             url=str(data.get("url", DEFAULT_URL)),
             key_ref=str(data.get("key_ref", "")),
             default=bool(data.get("default", False)),
             impersonate_secret_ref=str(data.get("impersonate_secret_ref", "")),
-            impersonate_callable=str(
-                data.get("impersonate_callable", DEFAULT_IMPERSONATE_CALLABLE)
-            ),
+            impersonate_callable=impersonate_callable,
         )
 
 
@@ -163,23 +188,22 @@ def resolve_secret(ref: str, profile_name: str, *, label: str = "secret") -> str
     ref = ref.strip()
     if not ref:
         raise AuthError(
-            f"profile '{profile_name}' has no {label}_ref — "
-            f"set it via `anvil-bridge init` or pass it explicitly"
+            f"profile '{profile_name}' has no {label}_ref configured"
         )
     scheme, _, rest = ref.partition(":")
     if scheme == "keyring":
-        return _load_from_keyring(rest, profile_name, label=label)
+        return SecretStr(_load_from_keyring(rest, profile_name, label=label))
     if scheme == "env":
         val = os.environ.get(rest)
         if not val:
             raise AuthError(
                 f"env var '{rest}' is not set (profile '{profile_name}', {label})"
             )
-        return val
+        return SecretStr(val)
     if scheme == "file":
-        return _load_from_file(rest, profile_name, label=label)
+        return SecretStr(_load_from_file(rest, profile_name, label=label))
     if scheme == "dotenv":
-        return _load_from_dotenv_walk(rest, profile_name, label=label)
+        return SecretStr(_load_from_dotenv_walk(rest, profile_name, label=label))
     raise AuthError(
         f"unknown {label}_ref scheme '{scheme}' in profile '{profile_name}'"
     )
@@ -188,10 +212,10 @@ def resolve_secret(ref: str, profile_name: str, *, label: str = "secret") -> str
 def resolve_key(profile: Profile, explicit: str | None = None) -> str:
     """Resolve the uplink key for a profile. Raises AuthError on failure."""
     if explicit:
-        return explicit
+        return SecretStr(explicit)
     env_key = os.environ.get(ENV_VAR_KEY)
     if env_key:
-        return env_key
+        return SecretStr(env_key)
     ref = profile.key_ref.strip()
     if not ref:
         raise AuthError(
@@ -262,25 +286,53 @@ def _load_from_file(rest: str, profile_name: str, *, label: str = "key") -> str:
     return val
 
 
+# Repo-root markers that cap the dotenv walk. The walk must not cross into a
+# user-home or filesystem-root .env that a hostile ancestor directory could
+# drop in — tying .env hygiene to the current project's boundary.
+_REPO_ROOT_MARKERS = (".git", "pyproject.toml", "setup.py", "setup.cfg")
+
+
+def _find_repo_scoped_dotenv(start: Path) -> Path | None:
+    """Walk up from `start` looking for `.env`; stop at the first repo-root marker.
+
+    Returns the .env path if one exists at or above `start` without first
+    crossing a repo-root marker without finding the .env. Returns None if no
+    .env exists within the project boundary.
+    """
+    current = start.resolve()
+    while True:
+        candidate = current / ".env"
+        if candidate.is_file():
+            return candidate
+        if any((current / m).exists() for m in _REPO_ROOT_MARKERS):
+            return None
+        parent = current.parent
+        if parent == current:  # filesystem root
+            return None
+        current = parent
+
+
 def _load_from_dotenv_walk(
     var_name: str, profile_name: str, *, label: str = "key"
 ) -> str:
     """Walk up from CWD looking for `.env`; read `var_name` from it.
 
-    This is the agent-safe default: the secret only lives in the repo's
-    (gitignored) .env, never on the command line or in an env var that the
-    caller had to type.
+    The walk stops at the first repo-root marker (`.git`, `pyproject.toml`,
+    `setup.py`, `setup.cfg`). This keeps .env resolution scoped to the
+    current project so a planted `.env` in a parent directory outside the
+    repo cannot poison secret loading.
     """
     var_name = var_name.strip()
     if not var_name:
         raise AuthError(
             f"malformed dotenv: {label}_ref (expected 'dotenv:<VAR>')"
         )
-    found = find_dotenv(usecwd=True)
+    found = _find_repo_scoped_dotenv(Path.cwd())
     if not found:
         raise AuthError(
-            f"no .env file found walking up from {Path.cwd()} "
-            f"(profile '{profile_name}', {label})"
+            f"no .env found at or above {Path.cwd()} within the project boundary "
+            f"(walk stops at .git / pyproject.toml / setup.py / setup.cfg; "
+            f"profile '{profile_name}', {label})"
         )
     values = dotenv_values(found)
     val = values.get(var_name)
