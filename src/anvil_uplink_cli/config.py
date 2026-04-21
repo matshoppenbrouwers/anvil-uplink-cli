@@ -62,12 +62,12 @@ class Profile:
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        d.pop("name", None)  # name is the table key, not a field
+        del d["name"]  # name is the table key, not a field
         # Elide defaulted optional fields so existing profiles round-trip cleanly.
-        if not d.get("impersonate_secret_ref"):
-            d.pop("impersonate_secret_ref", None)
-        if d.get("impersonate_callable") == DEFAULT_IMPERSONATE_CALLABLE:
-            d.pop("impersonate_callable", None)
+        if not d["impersonate_secret_ref"]:
+            del d["impersonate_secret_ref"]
+        if d["impersonate_callable"] == DEFAULT_IMPERSONATE_CALLABLE:
+            del d["impersonate_callable"]
         return d
 
     @classmethod
@@ -163,8 +163,7 @@ def resolve_secret(ref: str, profile_name: str, *, label: str = "secret") -> str
     ref = ref.strip()
     if not ref:
         raise AuthError(
-            f"profile '{profile_name}' has no {label}_ref — "
-            f"set it via `anvil-bridge init` or pass it explicitly"
+            f"profile '{profile_name}' has no {label}_ref configured"
         )
     scheme, _, rest = ref.partition(":")
     if scheme == "keyring":

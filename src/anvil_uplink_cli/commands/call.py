@@ -74,9 +74,7 @@ def _call(
     cfg = load_config()
     prof = cfg.get(profile_name)
     # Resolve the shared secret BEFORE connecting so missing config fails fast.
-    impersonate_secret = (
-        resolve_impersonate_secret(prof) if as_user else None
-    )
+    impersonate_secret = resolve_impersonate_secret(prof) if as_user else None
     with uplink(prof):
         if as_user:
             dispatcher = prof.impersonate_callable or DEFAULT_IMPERSONATE_CALLABLE
