@@ -61,7 +61,9 @@ def _run(script: str, profile_name: str | None, script_args: list[str]) -> None:
     if not path.is_file():
         raise ConfigError(f"not a file: {path}")
 
-    compiled = compile(path.read_text(encoding="utf-8"), str(path), "exec")
+    # utf-8-sig transparently strips a BOM; PowerShell's default
+    # `Out-File -Encoding utf8` writes one, which plain utf-8 would choke on.
+    compiled = compile(path.read_text(encoding="utf-8-sig"), str(path), "exec")
     cfg = load_config()
     prof = cfg.get(profile_name)
 

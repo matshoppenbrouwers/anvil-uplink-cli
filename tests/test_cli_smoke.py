@@ -182,3 +182,20 @@ def test_run_propagates_systemexit(tmp_path, monkeypatch):
 
     result = CliRunner().invoke(app, ["run", str(script)])
     assert result.exit_code == 5, result.stdout + result.stderr
+
+
+def test_run_tolerates_utf8_bom(tmp_path, monkeypatch):
+    """PowerShell's `Out-File -Encoding utf8` prepends U+FEFF; run must handle it."""
+    _write_profile(tmp_path, monkeypatch)
+
+    script = tmp_path / "bom.py"
+    # utf-8-sig encoding writes the BOM prefix that PowerShell writes on Windows.
+    script.write_text("print('no bom no problem')\n", encoding="utf-8-sig")
+
+    monkeypatch.setattr(
+        "anvil_uplink_cli.commands.run.uplink", _fake_uplink
+    )
+
+    result = CliRunner().invoke(app, ["run", str(script)])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "no bom no problem" in result.stdout
