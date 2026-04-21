@@ -45,10 +45,18 @@ def run(
     limit: int | None = typer.Option(
         None, "--limit", "-n", help="Maximum rows to return."
     ),
+    columns: str | None = typer.Option(
+        None,
+        "--columns",
+        "-c",
+        help="Comma-separated column allow-list (e.g. 'id,name,status'). Default: all.",
+    ),
     profile: str | None = typer.Option(None, "--profile", "-p", help="Profile name."),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of pretty output."),
 ) -> None:
-    run_or_exit(lambda: _query(table, filters, filters_json, limit, profile, json_out))
+    run_or_exit(
+        lambda: _query(table, filters, filters_json, limit, columns, profile, json_out)
+    )
 
 
 def _split_filter(raw: str, flag: str) -> tuple[str, str]:
@@ -91,11 +99,18 @@ def _collect_rows(tbl: Any, kwargs: dict[str, Any], limit: int | None) -> list[A
     return out
 
 
+# When the user doesn't pick columns, switch from horizontal to vertical
+# layout past this many keys — beyond ~8 cols, Rich's fold degenerates into
+# single-character columns in a normal terminal.
+_WIDE_TABLE_THRESHOLD = 8
+
+
 def _query(
     table_name: str,
     filters: list[str] | None,
     filters_json: list[str] | None,
     limit: int | None,
+    columns: str | None,
     profile_name: str | None,
     json_out: bool,
 ) -> None:
@@ -122,19 +137,57 @@ def _query(
         _console.print_json(to_json(jsonable))
         return
 
-    keys = list(dict.fromkeys(k for r in jsonable for k in r.keys()))
+    all_keys = list(dict.fromkeys(k for r in jsonable for k in r.keys()))
+    picked = _pick_columns(all_keys, columns)
+    if not picked:
+        _console.print(
+            f"[yellow]note[/]: --columns matched nothing in {table_name}. "
+            f"Available: {', '.join(all_keys)}"
+        )
+        return
+
     count = len(jsonable)
     suffix = "" if count == 1 else "s"
-    t = Table(
-        title=f"{table_name} [dim]({count} row{suffix})[/]",
-        show_header=True,
-        header_style="bold",
-    )
+    title = f"{table_name} [dim]({count} row{suffix})[/]"
+
+    user_picked = columns is not None
+    if not user_picked and len(picked) > _WIDE_TABLE_THRESHOLD:
+        _render_vertical(title, picked, jsonable, total_keys=len(all_keys))
+        return
+
+    _render_horizontal(title, picked, jsonable)
+
+
+def _pick_columns(all_keys: list[str], spec: str | None) -> list[str]:
+    if spec is None:
+        return all_keys
+    wanted = [s.strip() for s in spec.split(",") if s.strip()]
+    available = set(all_keys)
+    return [k for k in wanted if k in available]
+
+
+def _render_horizontal(title: str, keys: list[str], rows: list[dict[str, Any]]) -> None:
+    t = Table(title=title, show_header=True, header_style="bold")
     for k in keys:
         t.add_column(k, overflow="fold")
-    for r in jsonable:
+    for r in rows:
         t.add_row(*[_cell(r.get(k)) for k in keys])
     _console.print(t)
+
+
+def _render_vertical(
+    title: str, keys: list[str], rows: list[dict[str, Any]], total_keys: int
+) -> None:
+    _console.print(title)
+    _console.print(
+        f"[dim]wide table ({total_keys} columns) — showing as records. "
+        f"Use [bold]--columns a,b,c[/bold] to pick or [bold]--json[/bold] for the full payload.[/dim]"
+    )
+    key_width = max(len(k) for k in keys)
+    for i, r in enumerate(rows, start=1):
+        _console.print(f"[bold cyan]— row {i} —[/]")
+        for k in keys:
+            _console.print(f"  [bold]{k.ljust(key_width)}[/]  {_cell(r.get(k))}")
 
 
 def _cell(v: Any) -> str:

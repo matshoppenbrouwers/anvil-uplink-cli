@@ -156,6 +156,63 @@ def test_query_filter_and_limit(tmp_path, monkeypatch):
     assert len(rows) == 2  # limit respected
 
 
+def test_query_wide_table_uses_vertical_fallback(tmp_path, monkeypatch):
+    """Wide tables (>8 cols) must not render as a one-char-per-column smear."""
+    _write_profile(tmp_path, monkeypatch)
+
+    wide_row = {f"col_{i:02d}": f"v{i}" for i in range(20)}
+
+    class FakeTbl:
+        def search(self, **_kw):
+            return [wide_row]
+
+    import types
+    fake_tables_mod = types.SimpleNamespace(
+        app_tables=types.SimpleNamespace(wide=FakeTbl())
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules, "anvil.tables", fake_tables_mod
+    )
+    monkeypatch.setattr(
+        "anvil_uplink_cli.commands.query.uplink", _fake_uplink
+    )
+
+    result = CliRunner().invoke(app, ["query", "wide"])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "row 1" in result.stdout
+    assert "--columns" in result.stdout  # hint is shown
+    assert "col_00" in result.stdout and "col_19" in result.stdout
+
+
+def test_query_columns_flag_narrows_output(tmp_path, monkeypatch):
+    _write_profile(tmp_path, monkeypatch)
+
+    class FakeTbl:
+        def search(self, **_kw):
+            return [
+                {"_id": "1", "a": "A", "b": "B", "c": "C", "d": "D"},
+            ]
+
+    import types
+    fake_tables_mod = types.SimpleNamespace(
+        app_tables=types.SimpleNamespace(items=FakeTbl())
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules, "anvil.tables", fake_tables_mod
+    )
+    monkeypatch.setattr(
+        "anvil_uplink_cli.commands.query.uplink", _fake_uplink
+    )
+
+    result = CliRunner().invoke(
+        app, ["query", "items", "--columns", "a,c", "--json"]
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    # --json ignores --columns (columns only affects pretty output)
+    rows = json.loads(result.stdout)
+    assert rows == [{"_id": "1", "a": "A", "b": "B", "c": "C", "d": "D"}]
+
+
 def test_run_executes_script(tmp_path, monkeypatch):
     _write_profile(tmp_path, monkeypatch)
 
