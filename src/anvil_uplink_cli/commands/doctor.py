@@ -72,7 +72,16 @@ def _doctor(profile_name: str | None, json_out: bool) -> None:
         _console.print(f"[bold]tables ({len(tables)})[/]:")
         for t in tables:
             _console.print(f"  • {t}")
+        _console.print(
+            "[dim]note: anvil-uplink does not reliably enumerate tables; "
+            "the list above may be incomplete. "
+            "Try `anvil-bridge query <name>` against any known table.[/]"
+        )
     elif report.get("error"):
         _console.print(f"[yellow]note[/]: {report['error']}")
     else:
-        _console.print("[dim]no tables accessible[/]")
+        _console.print(
+            "[yellow]note[/]: anvil-uplink does not expose a list of Data Tables over the wire. "
+            "Connectivity is fine — use [bold]`anvil-bridge query <table>`[/bold] "
+            "with a known table name (see your app's [bold]anvil.yaml[/bold] under [bold]db_schema[/bold])."
+        )

@@ -72,8 +72,12 @@ def test_tables_json_output(tmp_path, monkeypatch):
         def list_columns(self):
             return self._cols
 
+        def search(self, **_kw):  # list_table_names filters by presence of .search()
+            return []
+
     class FakeAppTables:
         _private = "ignored"
+        cache = {"internal": "not-a-table"}  # matches the anvil-uplink proxy quirk
         projects = FakeTbl([{"name": "title", "type": "string"}])
         people = FakeTbl([{"name": "email", "type": "string"}])
 

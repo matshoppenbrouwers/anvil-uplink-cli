@@ -12,10 +12,26 @@ from anvil_uplink_cli.errors import ConfigError
 
 
 def list_table_names() -> list[str]:
-    """Sorted list of public attributes on `app_tables` (i.e. table names)."""
+    """Sorted list of public Data Table names exposed on `app_tables`.
+
+    Note: anvil-uplink's `app_tables` is a lazy proxy. `dir()` only shows
+    attributes that have already been resolved plus internal bookkeeping
+    (e.g. a `cache` dict). Relying on this for a full table listing is
+    unreliable — callers should treat an empty result as "enumeration
+    not supported", not "no tables exist".
+    """
     from anvil.tables import app_tables
 
-    return sorted(n for n in dir(app_tables) if not n.startswith("_"))
+    names: list[str] = []
+    for n in dir(app_tables):
+        if n.startswith("_"):
+            continue
+        val = getattr(app_tables, n, None)
+        # Real Data Table objects support .search(); internal attrs like the
+        # proxy's `cache` dict do not.
+        if callable(getattr(val, "search", None)):
+            names.append(n)
+    return sorted(names)
 
 
 def resolve_table(table_name: str) -> Any:

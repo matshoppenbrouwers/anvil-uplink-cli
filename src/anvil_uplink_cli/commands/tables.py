@@ -63,7 +63,12 @@ def _tables(profile_name: str | None, json_out: bool) -> None:
         return
 
     if not schema:
-        _console.print("[dim]no tables accessible[/]")
+        _console.print(
+            "[yellow]note[/]: anvil-uplink does not expose a list of Data Tables over the wire. "
+            "This command relies on `dir(app_tables)`, which is unreliable. "
+            "Consult your app's [bold]anvil.yaml[/bold] ([bold]db_schema[/bold] section) for table names, "
+            "then use [bold]`anvil-bridge query <table>`[/bold] or [bold]`row <table> <id>`[/bold] directly."
+        )
         return
 
     for name, cols in schema.items():
