@@ -13,11 +13,27 @@ Working on an Anvil app from an external editor usually means copy-pasting Pytho
 
 ## Install
 
-```bash
+Requires Python 3.10+. Install into a fresh virtual environment so the CLI and its dependencies stay isolated from your system Python.
+
+### Windows (PowerShell)
+
+```powershell
+python -m venv $HOME\.anvil-bridge
+$HOME\.anvil-bridge\Scripts\Activate.ps1
 pip install git+https://github.com/matshoppenbrouwers/anvil-uplink-cli
+anvil-bridge --version
 ```
 
-Requires Python 3.10+. Works on Linux, macOS, WSL, and Windows (PowerShell).
+### macOS / Linux / WSL (bash or zsh)
+
+```bash
+python3 -m venv ~/.anvil-bridge
+source ~/.anvil-bridge/bin/activate
+pip install git+https://github.com/matshoppenbrouwers/anvil-uplink-cli
+anvil-bridge --version
+```
+
+To use the CLI in a new shell, re-activate the venv first (`Activate.ps1` on Windows, `source .../activate` on Unix). On Windows, add the `Scripts` directory to your `PATH` if you want `anvil-bridge` available globally.
 
 ## Quickstart
 
