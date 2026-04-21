@@ -177,7 +177,7 @@ See [`docs/security.md`](docs/security.md) for full details.
 
 Apps that gate every callable with `require_user=True` can't be driven from an Uplink session out of the box. `anvil-bridge` adds a `--as-user <email>` flag that dispatches through a small server-side helper you drop into your app (`_uplink_run_as`), protected by a shared secret + email allowlist + audit log. See [`docs/impersonation.md`](docs/impersonation.md).
 
-**Status (v0.2.0):** the CLI-side plumbing and unit/smoke tests are green, but the end-to-end flow (CLI → server helper → `force_login` → nested `anvil.server.call` → audit row) has **not** been exercised against a deployed app yet. Treat `--as-user` as provisional until the test app (`formal-valuable-raccoon-dog.anvil.app`) has run the full happy/failure-mode matrix.
+**Status (v0.2.1):** end-to-end verified against a deployed app — happy path + all three failure modes (missing profile ref → exit 42, non-allowlisted email → exit 30, bad shared secret → exit 30) + two-phase audit row each produced the expected result. The helper template has been corrected from v0.2.0: the Server-Uplink guard now reads `context.remote_caller.type == "uplink" and is_trusted` instead of `context.type == "uplink"`, and the `_ALLOWED_EMAIL_SUFFIXES` annotation has been simplified for broader Anvil runtime compatibility.
 
 ## Status
 
