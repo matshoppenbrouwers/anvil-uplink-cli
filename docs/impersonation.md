@@ -4,6 +4,10 @@
 
 This is opt-in on both sides: the CLI ships the flag, but each app has to drop in a small server-side helper and wire it to a shared secret before the flow works.
 
+## Intended use
+
+This feature is intended for developers operating their own Anvil apps. Using it against an app you do not own or have explicit written permission to administer likely violates computer-misuse legislation in your jurisdiction (UK CMA 1990, US CFAA, EU NIS2, and local equivalents). The authors and contributors disclaim responsibility for unauthorized use.
+
 ## Why this exists
 
 Every callable decorated with `require_user=True` rejects Uplink calls with:
@@ -30,18 +34,25 @@ Three overlapping guards — all required:
 
 ## Server-side helper (drop into your app)
 
-Create `server_code/uplink_helpers.py` in your app and paste this verbatim, then edit the `_ALLOWED_EMAIL_SUFFIXES` tuple for your app's service-account email domain:
+Create `server_code/uplink_helpers.py` in your app and paste this verbatim, then edit the `_ALLOWED_EMAIL_SUFFIXES` tuple for your app's service-account email domain. This template is provided under this project's MIT license — pasting it into your app is allowed; if you maintain a third-party-licenses file, credit this project per MIT §3.
 
 ```python
 import datetime
+import hmac
 import anvil.secrets
 import anvil.server
 import anvil.users
 from anvil.tables import app_tables
 
 # Edit this for your app. Example: ("@yourcompany-ops.internal",)
+# Every entry MUST start with "@" — the assert below enforces this so a
+# copy-paste mistake like ("company.com",) cannot silently match
+# "attacker@evil.company.com".
 # MUST be non-empty — an empty tuple rejects all impersonation attempts.
 _ALLOWED_EMAIL_SUFFIXES = ()
+assert all(s.startswith("@") for s in _ALLOWED_EMAIL_SUFFIXES), (
+    "_ALLOWED_EMAIL_SUFFIXES entries must start with '@'"
+)
 
 
 @anvil.server.callable
@@ -55,11 +66,16 @@ def _uplink_run_as(shared_secret, email, fn_name, args=None, kwargs=None):
         raise PermissionError("_uplink_run_as: server-uplink-only")
 
     expected = anvil.secrets.get_secret("anvil_uplink_shared_secret")
-    if not shared_secret or shared_secret != expected:
+    if not isinstance(shared_secret, str) or not hmac.compare_digest(
+        shared_secret, expected
+    ):
         raise PermissionError("_uplink_run_as: invalid shared secret")
 
+    if not isinstance(email, str):
+        raise PermissionError("_uplink_run_as: email must be a string")
+    email_lc = email.lower()
     if not _ALLOWED_EMAIL_SUFFIXES or not any(
-        email.endswith(suffix) for suffix in _ALLOWED_EMAIL_SUFFIXES
+        email_lc.endswith(suffix.lower()) for suffix in _ALLOWED_EMAIL_SUFFIXES
     ):
         raise PermissionError(
             f"_uplink_run_as: {email} not in impersonable allowlist"
@@ -86,7 +102,8 @@ def _uplink_run_as(shared_secret, email, fn_name, args=None, kwargs=None):
         return result
     except Exception as exc:
         audit_row["result_status"] = "error"
-        audit_row["error_message"] = (f"{type(exc).__name__}: {exc}")[:500]
+        # repr() avoids attacker-controlled f-string surprises from exc.__str__
+        audit_row["error_message"] = repr(exc)[:500]
         raise
     finally:
         try:
@@ -204,6 +221,21 @@ Rotate the shared secret without downtime by using both old + new briefly:
 ## Warnings
 
 - **Never put real customer email domains in the allowlist.** If someone exfiltrates both your uplink key and shared secret, the allowlist is the only barrier between them and your paying users.
+- **Pick a domain your app's signup flow cannot accept.** If the allowlist suffix is a domain reachable via `anvil.users.signup_with_email` (or any self-signup path), an attacker who already holds the uplink key + shared secret can create their own account into the allowlist and self-elevate. Prefer a reserved or internal-only domain, and/or reject signups with the service-account suffix.
 - **Don't impersonate without the allowlist.** The empty `_ALLOWED_EMAIL_SUFFIXES = ()` default rejects all calls on purpose — so a copy-pasted example never becomes a live authority.
+- **Every allowlist entry must start with `@`.** The template's `assert` enforces this at import time; the `@` prevents a substring bypass like `"attacker@evil.yourco.internal"` matching a suffix `"yourco.internal"`.
 - **Inner callable serialization.** `args` / `kwargs` pass through `anvil.server.call` twice (CLI -> dispatcher -> target). They must be JSON-native (or Anvil-portable). This is fine for diagnostics and admin flows; don't use it to pass arbitrary Python objects.
 - **Service accounts need the same auxiliary setup as a real user.** If your callables check `users/<row>/has_role` or similar side-table lookups, make sure the service account has matching rows, or the `require_user` gate will pass but the business-logic gate will still reject.
+- **Shell history retains `--as-user`.** The email itself is not a secret, but it does tell a local observer which identities are impersonable. Treat shell history on shared hosts accordingly. The shared secret stays in `.env` and is never placed on the command line.
+
+## Data protection notes
+
+The `uplink_audit` rows contain personal data (`impersonated_email`, `caller_ip`) and become your responsibility as data controller when you deploy the helper. Non-exhaustive checklist:
+
+- **Retention.** Decide a retention window (e.g. 90 days) and schedule deletion. Storage-limitation expectations under GDPR Art. 5(1)(e) apply if your users are in the EU/UK/EEA.
+- **Erasure.** A data subject who requests erasure over an email in `impersonated_email` should be removable. A background job can delete matching rows; audit intent is not an automatic exemption.
+- **ROPA.** Include this processing in your Record of Processing Activities (GDPR Art. 30). The usual lawful basis is legitimate interest (fraud prevention / accountability) — document it before relying on it.
+- **Access control.** Set the `uplink_audit` table to Forms=None, Server=Full (step 2 above). Do not expose rows to Client Uplinks or the browser.
+- **Spreadsheet exports.** If you ever export `uplink_audit` to Excel/CSV, treat `error_message` as untrusted text and strip leading `=`, `+`, `-`, `@` to prevent formula injection.
+
+This is guidance, not legal advice — consult a qualified attorney for binding opinions specific to your jurisdiction and data-subject population.
