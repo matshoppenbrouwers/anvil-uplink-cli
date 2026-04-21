@@ -9,12 +9,14 @@ Key resolution order:
     2. profile.key_ref:
          keyring:<service>/<name>
          env:<VAR_NAME>
-         file:<path>:<VAR_NAME>     (dotenv file)
+         file:<path>:<VAR_NAME>     (exact dotenv path)
+         dotenv:<VAR_NAME>          (walk up from CWD to find .env)
 
 The key ref scheme is:
     keyring:anvil-bridge/lat-profit
     env:ANVIL_BRIDGE_KEY_LATPROFIT
-    file:.env:ANVIL_KEY
+    file:.env:ANVIL_UPLINK_KEY
+    dotenv:ANVIL_UPLINK_KEY          (recommended — agent-safe, repo-local)
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import tomli_w
-from dotenv import dotenv_values
+from dotenv import dotenv_values, find_dotenv
 from platformdirs import user_config_dir
 
 # tomllib is stdlib in 3.11+, tomli is the backport for 3.10
@@ -157,6 +159,8 @@ def resolve_key(profile: Profile, explicit: str | None = None) -> str:
         return val
     if scheme == "file":
         return _load_from_file(rest, profile.name)
+    if scheme == "dotenv":
+        return _load_from_dotenv_walk(rest, profile.name)
     raise AuthError(f"unknown key_ref scheme '{scheme}' in profile '{profile.name}'")
 
 
@@ -200,6 +204,33 @@ def _load_from_file(rest: str, profile_name: str) -> str:
     if not val:
         raise AuthError(
             f"'{var_name}' not set in {p} (profile '{profile_name}')"
+        )
+    return val
+
+
+def _load_from_dotenv_walk(var_name: str, profile_name: str) -> str:
+    """Walk up from CWD looking for `.env`; read `var_name` from it.
+
+    This is the agent-safe default: the secret only lives in the repo's
+    (gitignored) .env, never on the command line or in an env var that the
+    caller had to type.
+    """
+    var_name = var_name.strip()
+    if not var_name:
+        raise AuthError(
+            f"malformed dotenv: key_ref (expected 'dotenv:<VAR>')"
+        )
+    found = find_dotenv(usecwd=True)
+    if not found:
+        raise AuthError(
+            f"no .env file found walking up from {Path.cwd()} "
+            f"(profile '{profile_name}')"
+        )
+    values = dotenv_values(found)
+    val = values.get(var_name)
+    if not val:
+        raise AuthError(
+            f"'{var_name}' not set in {found} (profile '{profile_name}')"
         )
     return val
 

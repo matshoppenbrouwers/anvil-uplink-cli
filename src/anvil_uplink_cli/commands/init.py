@@ -116,8 +116,15 @@ def run(
 
 
 def _prompt_key_ref(name: str) -> str:
+    _console.print(
+        "[dim]storage options:[/]\n"
+        "  [bold]repo[/]    — walk up from CWD to find .env (agent-safe, recommended)\n"
+        "  [bold]keyring[/] — OS credential store (most secure for single-machine use)\n"
+        "  [bold]env[/]     — read from a shell env var (transient)\n"
+        "  [bold]file[/]    — exact dotenv path (for shared .env outside the repo)"
+    )
     backend = typer.prompt(
-        "Key storage (keyring / env / dotenv)", default="keyring"
+        "Key storage (repo / keyring / env / file)", default="repo"
     ).strip().lower()
     if backend == "keyring":
         secret = typer.prompt("Server Uplink key", hide_input=True)
@@ -129,7 +136,20 @@ def _prompt_key_ref(name: str) -> str:
             f"[yellow]remember to set[/] [bold]{env_var}[/] in your shell before running commands"
         )
         return f"env:{env_var}"
-    if backend in {"dotenv", "file", ".env"}:
+    if backend in {"repo", "dotenv"}:
+        var = typer.prompt("Variable name", default=_slugify_env_var(name))
+        secret = typer.prompt("Server Uplink key", hide_input=True)
+        dotenv_path = Path.cwd() / ".env"
+        _append_dotenv_var(dotenv_path, var, secret)
+        added = _ensure_gitignore_entry(Path.cwd() / ".gitignore", ".env")
+        if added:
+            _console.print("[dim]added .env to .gitignore[/]")
+        _console.print(
+            f"[green]wrote[/] [bold]{var}[/] to [dim]{dotenv_path}[/]\n"
+            "[dim]anvil-bridge will find it by walking up from your CWD.[/]"
+        )
+        return f"dotenv:{var}"
+    if backend in {"file", ".env"}:
         dotenv_path = Path(
             typer.prompt("Path to .env file", default="./.env")
         ).expanduser()
@@ -147,7 +167,7 @@ def _prompt_key_ref(name: str) -> str:
                 _console.print(f"[dim]added {rel} to .gitignore[/]")
         return f"file:{dotenv_path}:{var}"
     raise typer.BadParameter(
-        f"unknown storage backend: {backend!r} (use keyring, env, or dotenv)"
+        f"unknown storage backend: {backend!r} (use repo, keyring, env, or file)"
     )
 
 

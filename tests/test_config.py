@@ -140,6 +140,45 @@ def test_resolve_key_dotenv_missing_file(monkeypatch: pytest.MonkeyPatch) -> Non
         resolve_key(p)
 
 
+def test_resolve_key_dotenv_walk_finds_env_up_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    repo = tmp_path / "repo"
+    nested = repo / "subdir" / "deeper"
+    nested.mkdir(parents=True)
+    (repo / ".env").write_text("ANVIL_UPLINK_KEY=walked-up\n")
+    monkeypatch.chdir(nested)
+
+    p = Profile(name="x", key_ref="dotenv:ANVIL_UPLINK_KEY")
+    assert resolve_key(p) == "walked-up"
+
+
+def test_resolve_key_dotenv_walk_no_env_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+
+    p = Profile(name="x", key_ref="dotenv:ANVIL_UPLINK_KEY")
+    with pytest.raises(AuthError, match="no .env file found"):
+        resolve_key(p)
+
+
+def test_resolve_key_dotenv_walk_var_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    (tmp_path / ".env").write_text("OTHER_KEY=x\n")
+    monkeypatch.chdir(tmp_path)
+
+    p = Profile(name="x", key_ref="dotenv:ANVIL_UPLINK_KEY")
+    with pytest.raises(AuthError, match="'ANVIL_UPLINK_KEY' not set"):
+        resolve_key(p)
+
+
 def test_resolve_key_from_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENV_VAR_KEY, raising=False)
     import keyring
