@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anvil-uplink-cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "Terminal bridge to Anvil apps via the Server Uplink. Run diagnostics, query Data Tables, and call server functions from your shell or an AI coding assistant."
 readme = "README.md"
 license = { text = "MIT" }

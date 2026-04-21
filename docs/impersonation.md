@@ -41,17 +41,18 @@ from anvil.tables import app_tables
 
 # Edit this for your app. Example: ("@yourcompany-ops.internal",)
 # MUST be non-empty — an empty tuple rejects all impersonation attempts.
-_ALLOWED_EMAIL_SUFFIXES: tuple[str, ...] = ()
+_ALLOWED_EMAIL_SUFFIXES = ()
 
 
 @anvil.server.callable
 def _uplink_run_as(shared_secret, email, fn_name, args=None, kwargs=None):
     """Impersonate a service-account user and dispatch fn_name.
 
-    Uplink-only; requires the shared secret; allowlist-gated; audited.
+    Server-Uplink-only; requires the shared secret; allowlist-gated; audited.
     """
-    if anvil.server.context.type != "uplink":
-        raise PermissionError("_uplink_run_as: uplink-only")
+    rc = getattr(anvil.server.context, "remote_caller", None)
+    if rc is None or rc.type != "uplink" or not getattr(rc, "is_trusted", False):
+        raise PermissionError("_uplink_run_as: server-uplink-only")
 
     expected = anvil.secrets.get_secret("anvil_uplink_shared_secret")
     if not shared_secret or shared_secret != expected:
@@ -98,7 +99,7 @@ def _uplink_run_as(shared_secret, email, fn_name, args=None, kwargs=None):
 
 | Line | Guard | If it fails |
 |------|-------|-------------|
-| `context.type != "uplink"` | rejects calls from Forms / client code | `PermissionError: uplink-only` |
+| `remote_caller.type != "uplink" or not is_trusted` | rejects calls from Forms, server modules, or **Client** Uplinks — only a trusted **Server** Uplink passes | `PermissionError: server-uplink-only` |
 | shared-secret check | ensures caller isn't just holding the uplink key | `PermissionError: invalid shared secret` |
 | allowlist check | blocks impersonation of anyone outside the service-account domain | `PermissionError: ... not in impersonable allowlist` |
 | `user` lookup | typo / missing user | `LookupError: user <email> not found` |
