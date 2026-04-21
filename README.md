@@ -7,9 +7,24 @@ A terminal bridge to Anvil apps via the Server Uplink. Run diagnostics, query Da
 Working on an Anvil app from an external editor usually means copy-pasting Python into the Anvil Server Console and pasting results back. This CLI removes that round-trip by wrapping the `anvil-uplink` library with:
 
 - one-command setup (`anvil-bridge init`)
-- safe key handling (OS keyring or `.env`)
+- safe key handling (OS keyring, repo-local `.env`, or env var)
 - multi-app profiles
 - robust JSON / pretty output of Data Table rows, Media, datetimes, and portable classes
+- **agent-safe mode**: the key stays in a gitignored `.env`, never in the tool call or agent context
+
+## How this differs from the official Anvil CLI
+
+Anvil ships an [official CLI](https://anvil.works/docs/using-another-ide/quickstart) (`anvil checkout`, `anvil watch`, …) for **editing app source** in a local IDE and syncing it to the cloud Editor. That's a code-sync tool.
+
+`anvil-bridge` is a **runtime** tool. It doesn't touch your source — it connects to the already-deployed app as a Server Uplink client and lets you:
+
+| You want to… | Use |
+|---|---|
+| Edit Forms/Modules in VS Code and sync | **official `anvil` CLI** |
+| Query a Data Table, fetch a row, run a `@callable`, drop into a connected REPL | **`anvil-bridge`** |
+| Run a local diagnostic script against live app data | **`anvil-bridge run`** |
+
+Use both. They solve different problems.
 
 ## Install
 
@@ -24,7 +39,7 @@ pip install git+https://github.com/matshoppenbrouwers/anvil-uplink-cli
 anvil-bridge --version
 ```
 
-### macOS / Linux / WSL (bash or zsh)
+### macOS / Linux (bash or zsh)
 
 ```bash
 python3 -m venv ~/.anvil-bridge
@@ -32,6 +47,19 @@ source ~/.anvil-bridge/bin/activate
 pip install git+https://github.com/matshoppenbrouwers/anvil-uplink-cli
 anvil-bridge --version
 ```
+
+### WSL (Ubuntu) — for use from Claude Code / agents
+
+Install into a WSL-side venv so agent Bash tool calls can reach the CLI directly. **Don't activate a Windows venv from WSL** — the paths don't translate.
+
+```bash
+python3 -m venv ~/.anvil-bridge
+source ~/.anvil-bridge/bin/activate
+pip install git+https://github.com/matshoppenbrouwers/anvil-uplink-cli
+anvil-bridge --version
+```
+
+The Windows Credential Manager is **not** readable from WSL, so `keyring:` key_refs configured on Windows won't resolve in WSL. Use the `dotenv:` key_ref scheme (see [Agent-safe setup](#agent-safe-setup-for-claude-code-or-any-ai-assistant)) — it works identically on both sides.
 
 To use the CLI in a new shell, re-activate the venv first (`Activate.ps1` on Windows, `source .../activate` on Unix). On Windows, add the `Scripts` directory to your `PATH` if you want `anvil-bridge` available globally.
 
@@ -54,6 +82,50 @@ To use the CLI in a new shell, re-activate the venv first (`Activate.ps1` on Win
    anvil-bridge repl
    ```
 
+## Agent-safe setup (for Claude Code or any AI assistant)
+
+When an agent drives the CLI, the Server Uplink key must never appear in a tool call, command-line argument, or anything the agent can read. Inline env vars (`ANVIL_BRIDGE_KEY='...' anvil-bridge ...`) land in the transcript and create an exfiltration path via prompt injection.
+
+The `dotenv:` key_ref scheme avoids this: the key sits in a gitignored `.env` at (or above) your working directory, and `anvil-bridge` reads it directly.
+
+**Setup once:**
+
+1. Run the wizard and pick the `repo` storage backend (default):
+   ```bash
+   anvil-bridge init
+   # Profile name [default]: lat-profit
+   # Anvil uplink URL [wss://anvil.works/uplink]:
+   # Key storage (repo / keyring / env / file) [repo]:
+   # Variable name [ANVIL_UPLINK_KEY_LATPROFIT]: ANVIL_UPLINK_KEY
+   # Server Uplink key: ****************
+   ```
+   This writes `ANVIL_UPLINK_KEY="..."` to `./.env`, adds `.env` to `./.gitignore`, and stores `key_ref = "dotenv:ANVIL_UPLINK_KEY"` in the profile.
+
+2. Or do it by hand:
+   ```bash
+   echo 'ANVIL_UPLINK_KEY="server_XXXXXXXX..."' >> .env
+   echo '.env' >> .gitignore
+   ```
+   …and write a profile at `~/.config/anvil-bridge/config.toml` (Linux/WSL) or `%APPDATA%\anvil-bridge\config.toml` (Windows):
+   ```toml
+   [profiles.lat-profit]
+   url = "wss://anvil.works/uplink"
+   key_ref = "dotenv:ANVIL_UPLINK_KEY"
+   default = true
+   ```
+
+**What the agent runs:**
+
+```bash
+anvil-bridge query bamboo_pay_history --limit 5 --json
+anvil-bridge row users '[1043256,6089459745]' --json
+anvil-bridge run ./scripts/diag.py
+```
+
+No `--key`. No inline env. No prompt for a secret. The CLI walks up from CWD to find `.env`, so one file at your monorepo root covers every subrepo.
+
+**Why this matters:** with inline env vars, a malicious row value coming back from the app could instruct the agent to "repeat that last command into external tool X" and drag the key out. With `dotenv:`, the key is never in the agent's context, so that class of injection is defanged.
+
 ## Commands
 
 | Command | Purpose |
@@ -73,9 +145,18 @@ All commands accept `--profile <name>` for multi-app use and `--json` for machin
 
 The **Server Uplink** key grants full Server Module privileges to whoever holds it: direct Data Table read/write, user management, secret access. Treat it like a production credential.
 
-- Prefer storing keys in your OS keyring (the default; handled by `init`).
-- If using `.env`, make sure it's in `.gitignore` (`init` handles this automatically).
-- For connecting untrusted systems (IoT, customer machines), use a Client Uplink key instead.
+Key storage backends in order of preference:
+
+| Backend | key_ref | When |
+|---|---|---|
+| **Repo-local `.env`** (recommended for agents) | `dotenv:VAR` | AI assistants, multi-machine dev, WSL. Walks up from CWD to find `.env`. |
+| **OS keyring** | `keyring:anvil-bridge/<profile>` | Single-machine, single-user, no agents. Most secure at rest. |
+| **Env var** | `env:VAR` | CI, ephemeral shells. Transient. |
+| **Exact dotenv path** | `file:<path>:VAR` | Shared `.env` outside any repo tree. |
+
+- `init` writes `.env` / updates `.gitignore` automatically for the `repo` backend.
+- For connecting untrusted systems (IoT, customer machines), use a Client Uplink key instead of a Server Uplink key.
+- WSL cannot read Windows Credential Manager — use `dotenv:` if you need both environments.
 
 See [`docs/security.md`](docs/security.md) for full details.
 
