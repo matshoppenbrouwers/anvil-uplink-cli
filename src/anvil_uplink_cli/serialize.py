@@ -33,16 +33,38 @@ def _is_media(obj: Any) -> bool:
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
+    """Serialize an anvil.tables.Row.
+
+    anvil-uplink's Row iteration is not consistent across versions: some yield
+    column names (keys only), others yield `(key, value)` pairs dict.items()-style.
+    Handle both shapes without a try/except-on-indexing dance.
+    """
     out: dict[str, Any] = {"_id": row.get_id()}
     try:
-        keys = list(row)
+        items = list(row)
     except TypeError:
-        keys = []
-    for k in keys:
+        return out
+    for item in items:
+        if (
+            isinstance(item, (list, tuple))
+            and len(item) == 2
+            and isinstance(item[0], str)
+        ):
+            key, value = item
+            try:
+                out[key] = to_jsonable(value)
+            except Exception as e:  # one bad column shouldn't poison the row
+                out[key] = {"_unserializable": type(e).__name__, "detail": str(e)}
+            continue
+        if not isinstance(item, str):
+            # Unknown iteration shape; skip with a breadcrumb rather than crash.
+            out[repr(item)] = {"_unserializable": "BadIterationShape"}
+            continue
+        key = item
         try:
-            out[k] = to_jsonable(row[k])
-        except Exception as e:  # defensive: never let one bad column poison output
-            out[k] = {"_unserializable": type(e).__name__, "detail": str(e)}
+            out[key] = to_jsonable(row[key])
+        except Exception as e:
+            out[key] = {"_unserializable": type(e).__name__, "detail": str(e)}
     return out
 
 

@@ -76,6 +76,32 @@ def test_row() -> None:
     assert out == {"_id": "abc-123", "name": "Alice", "age": 30}
 
 
+class FakeItemsRow:
+    """Mirrors anvil-uplink's observed Row: iteration yields (key, value) pairs."""
+
+    def __init__(self, row_id: str, data: dict) -> None:
+        self._id = row_id
+        self._data = data
+
+    def get_id(self) -> str:
+        return self._id
+
+    def __iter__(self):
+        return iter(list(self._data.items()))
+
+    def __getitem__(self, k):
+        return self._data[k]
+
+
+def test_row_iter_yields_items_pairs() -> None:
+    # Regression: observed against lat-profit's bamboo_pay_history, where
+    # `list(row)` returns [[k, v], ...] instead of [k, ...]. Old serializer
+    # did `out[k] = ...` with k as a list → TypeError: unhashable type: 'list'.
+    row = FakeItemsRow("xyz-9", {"email": "a@b.c", "active": True})
+    out = to_jsonable(row)
+    assert out == {"_id": "xyz-9", "email": "a@b.c", "active": True}
+
+
 def test_row_with_nested_row() -> None:
     parent = FakeRow("parent-1", {"title": "Top"})
     child = FakeRow("child-1", {"parent": parent, "n": 1})
