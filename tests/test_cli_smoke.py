@@ -35,6 +35,33 @@ def _write_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_UPLINK_KEY", "fake-key-value")
 
 
+def _write_impersonate_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    impersonate_callable: str | None = None,
+    with_secret: bool = True,
+) -> None:
+    """Config + env vars for a profile that supports --as-user."""
+    cfg_dir = tmp_path / "anvil-bridge"
+    cfg_dir.mkdir()
+    lines = [
+        "[profiles.test]",
+        'url = "wss://anvil.works/uplink"',
+        'key_ref = "env:TEST_UPLINK_KEY"',
+        "default = true",
+    ]
+    if with_secret:
+        lines.append('impersonate_secret_ref = "env:TEST_SHARED_SECRET"')
+    if impersonate_callable is not None:
+        lines.append(f'impersonate_callable = "{impersonate_callable}"')
+    (cfg_dir / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("TEST_UPLINK_KEY", "fake-key-value")
+    if with_secret:
+        monkeypatch.setenv("TEST_SHARED_SECRET", "shared-123")
+
+
 def test_call_happy_path(tmp_path, monkeypatch):
     _write_profile(tmp_path, monkeypatch)
 
@@ -243,6 +270,121 @@ def test_run_propagates_systemexit(tmp_path, monkeypatch):
 
     result = CliRunner().invoke(app, ["run", str(script)])
     assert result.exit_code == 5, result.stdout + result.stderr
+
+
+def test_call_as_user_happy_path(tmp_path, monkeypatch):
+    _write_impersonate_profile(tmp_path, monkeypatch)
+
+    captured = {}
+
+    def fake_call(fn_name, *args, **kwargs):
+        captured["fn"] = fn_name
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"ok": True}
+
+    import anvil.server
+
+    monkeypatch.setattr(anvil.server, "call", fake_call)
+    monkeypatch.setattr("anvil_uplink_cli.commands.call.uplink", _fake_uplink)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "call",
+            "my_fn",
+            "--as-user",
+            "svc@example.internal",
+            "42",
+            "--kwarg",
+            "flag=true",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert captured["fn"] == "_uplink_run_as"
+    # (secret, email, target_fn, args_list, kwargs_dict)
+    assert captured["args"] == (
+        "shared-123",
+        "svc@example.internal",
+        "my_fn",
+        [42],
+        {"flag": True},
+    )
+    assert captured["kwargs"] == {}
+    assert json.loads(result.stdout) == {"ok": True}
+
+
+def test_call_as_user_without_impersonate_secret_ref_exits_42(tmp_path, monkeypatch):
+    _write_impersonate_profile(tmp_path, monkeypatch, with_secret=False)
+
+    def fake_call(*_a, **_kw):
+        raise AssertionError("must not reach anvil.server.call without a secret_ref")
+
+    import anvil.server
+
+    monkeypatch.setattr(anvil.server, "call", fake_call)
+    monkeypatch.setattr("anvil_uplink_cli.commands.call.uplink", _fake_uplink)
+
+    result = CliRunner().invoke(
+        app, ["call", "my_fn", "--as-user", "svc@example.internal"]
+    )
+    assert result.exit_code == 42, result.stdout + result.stderr
+    assert "impersonation error" in (result.stdout + result.stderr)
+    assert "impersonate_secret_ref" in (result.stdout + result.stderr)
+
+
+def test_call_as_user_propagates_server_permission_error(tmp_path, monkeypatch):
+    _write_impersonate_profile(tmp_path, monkeypatch)
+
+    # Simulate the server-side hardened helper rejecting a bad secret.
+    # map_exception routes AnvilWrappedError -> EXIT_SERVER_RAISED (30).
+    import anvil.server
+
+    class _FakeWrapped(Exception):
+        type = "PermissionError"
+
+    # Register the fake as AnvilWrappedError so errors.map_exception catches it.
+    monkeypatch.setattr(
+        "anvil_uplink_cli.errors.AnvilWrappedError", _FakeWrapped, raising=False
+    )
+
+    def fake_call(*_a, **_kw):
+        raise _FakeWrapped("_uplink_run_as: invalid shared secret")
+
+    monkeypatch.setattr(anvil.server, "call", fake_call)
+    monkeypatch.setattr("anvil_uplink_cli.commands.call.uplink", _fake_uplink)
+
+    result = CliRunner().invoke(
+        app, ["call", "my_fn", "--as-user", "svc@example.internal"]
+    )
+    assert result.exit_code == 30, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "server raised PermissionError" in combined
+    assert "invalid shared secret" in combined
+
+
+def test_call_as_user_uses_custom_dispatcher_name(tmp_path, monkeypatch):
+    _write_impersonate_profile(
+        tmp_path, monkeypatch, impersonate_callable="my_shim"
+    )
+
+    captured = {}
+
+    def fake_call(fn_name, *args, **kwargs):
+        captured["fn"] = fn_name
+        return "ok"
+
+    import anvil.server
+
+    monkeypatch.setattr(anvil.server, "call", fake_call)
+    monkeypatch.setattr("anvil_uplink_cli.commands.call.uplink", _fake_uplink)
+
+    result = CliRunner().invoke(
+        app, ["call", "my_fn", "--as-user", "svc@example.internal", "--json"]
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert captured["fn"] == "my_shim"
 
 
 def test_run_tolerates_utf8_bom(tmp_path, monkeypatch):

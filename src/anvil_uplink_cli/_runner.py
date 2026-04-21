@@ -22,9 +22,11 @@ import typer
 from anvil_uplink_cli.errors import (
     EXIT_AUTH,
     EXIT_CONFIG,
+    EXIT_IMPERSONATION,
     EXIT_USAGE,
     AuthError,
     ConfigError,
+    ImpersonationError,
     map_exception,
 )
 
@@ -46,6 +48,9 @@ def run_or_exit(work: Callable[[], T]) -> T:
     except AuthError as e:
         typer.echo(f"auth error: {e}", err=True)
         raise typer.Exit(code=EXIT_AUTH) from e
+    except ImpersonationError as e:
+        typer.echo(f"impersonation error: {e}", err=True)
+        raise typer.Exit(code=EXIT_IMPERSONATION) from e
     except ValueError as e:
         # Arg / filter parsing raises ValueError; treat as usage error.
         typer.echo(f"usage error: {e}", err=True)

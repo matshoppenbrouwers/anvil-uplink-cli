@@ -37,12 +37,13 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover — CI covers both paths
     import tomli as tomllib  # type: ignore[import-not-found]
 
-from anvil_uplink_cli.errors import AuthError, ConfigError
+from anvil_uplink_cli.errors import AuthError, ConfigError, ImpersonationError
 
 DEFAULT_URL = "wss://anvil.works/uplink"
 ENV_VAR_KEY = "ANVIL_BRIDGE_KEY"
 CONFIG_FILENAME = "config.toml"
 KEYRING_SERVICE = "anvil-bridge"
+DEFAULT_IMPERSONATE_CALLABLE = "_uplink_run_as"
 
 
 def config_path() -> Path:
@@ -56,10 +57,17 @@ class Profile:
     url: str = DEFAULT_URL
     key_ref: str = ""
     default: bool = False
+    impersonate_secret_ref: str = ""
+    impersonate_callable: str = DEFAULT_IMPERSONATE_CALLABLE
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("name", None)  # name is the table key, not a field
+        # Elide defaulted optional fields so existing profiles round-trip cleanly.
+        if not d.get("impersonate_secret_ref"):
+            d.pop("impersonate_secret_ref", None)
+        if d.get("impersonate_callable") == DEFAULT_IMPERSONATE_CALLABLE:
+            d.pop("impersonate_callable", None)
         return d
 
     @classmethod
@@ -69,6 +77,10 @@ class Profile:
             url=str(data.get("url", DEFAULT_URL)),
             key_ref=str(data.get("key_ref", "")),
             default=bool(data.get("default", False)),
+            impersonate_secret_ref=str(data.get("impersonate_secret_ref", "")),
+            impersonate_callable=str(
+                data.get("impersonate_callable", DEFAULT_IMPERSONATE_CALLABLE)
+            ),
         )
 
 
@@ -136,6 +148,43 @@ def save_config(cfg: Config, path: Path | None = None) -> Path:
     return p
 
 
+def resolve_secret(ref: str, profile_name: str, *, label: str = "secret") -> str:
+    """Resolve a reference string via the shared scheme dispatcher.
+
+    Used for both the uplink key and any other per-profile secret (e.g. the
+    impersonation shared secret). Raises AuthError on failure.
+
+    Supported schemes:
+        keyring:<service>/<name>
+        env:<VAR>
+        file:<path>:<VAR>
+        dotenv:<VAR>
+    """
+    ref = ref.strip()
+    if not ref:
+        raise AuthError(
+            f"profile '{profile_name}' has no {label}_ref — "
+            f"set it via `anvil-bridge init` or pass it explicitly"
+        )
+    scheme, _, rest = ref.partition(":")
+    if scheme == "keyring":
+        return _load_from_keyring(rest, profile_name, label=label)
+    if scheme == "env":
+        val = os.environ.get(rest)
+        if not val:
+            raise AuthError(
+                f"env var '{rest}' is not set (profile '{profile_name}', {label})"
+            )
+        return val
+    if scheme == "file":
+        return _load_from_file(rest, profile_name, label=label)
+    if scheme == "dotenv":
+        return _load_from_dotenv_walk(rest, profile_name, label=label)
+    raise AuthError(
+        f"unknown {label}_ref scheme '{scheme}' in profile '{profile_name}'"
+    )
+
+
 def resolve_key(profile: Profile, explicit: str | None = None) -> str:
     """Resolve the uplink key for a profile. Raises AuthError on failure."""
     if explicit:
@@ -149,22 +198,27 @@ def resolve_key(profile: Profile, explicit: str | None = None) -> str:
             f"profile '{profile.name}' has no key_ref — "
             f"set it via `anvil-bridge init` or pass --key"
         )
-    scheme, _, rest = ref.partition(":")
-    if scheme == "keyring":
-        return _load_from_keyring(rest, profile.name)
-    if scheme == "env":
-        val = os.environ.get(rest)
-        if not val:
-            raise AuthError(f"env var '{rest}' is not set (profile '{profile.name}')")
-        return val
-    if scheme == "file":
-        return _load_from_file(rest, profile.name)
-    if scheme == "dotenv":
-        return _load_from_dotenv_walk(rest, profile.name)
-    raise AuthError(f"unknown key_ref scheme '{scheme}' in profile '{profile.name}'")
+    return resolve_secret(ref, profile.name, label="key")
 
 
-def _load_from_keyring(rest: str, profile_name: str) -> str:
+def resolve_impersonate_secret(profile: Profile) -> str:
+    """Resolve the shared impersonation secret for a profile.
+
+    Raises ImpersonationError if the profile has no impersonate_secret_ref,
+    so --as-user fails cleanly with a dedicated exit code rather than
+    leaking through as a generic auth error.
+    """
+    ref = profile.impersonate_secret_ref.strip()
+    if not ref:
+        raise ImpersonationError(
+            f"profile '{profile.name}' has no impersonate_secret_ref — "
+            f"add it to ~/.config/anvil-bridge/config.toml and put the "
+            f"shared secret in your .env. See docs/impersonation.md."
+        )
+    return resolve_secret(ref, profile.name, label="impersonate_secret")
+
+
+def _load_from_keyring(rest: str, profile_name: str, *, label: str = "key") -> str:
     # rest format: "<service>/<key_name>"
     if "/" in rest:
         service, _, username = rest.partition("/")
@@ -180,18 +234,18 @@ def _load_from_keyring(rest: str, profile_name: str) -> str:
         raise AuthError(f"keyring access failed: {e}") from e
     if not val:
         raise AuthError(
-            f"no key stored in keyring for {service}/{username} "
+            f"no {label} stored in keyring for {service}/{username} "
             f"(profile '{profile_name}') — re-run `anvil-bridge init`"
         )
     return val
 
 
-def _load_from_file(rest: str, profile_name: str) -> str:
+def _load_from_file(rest: str, profile_name: str, *, label: str = "key") -> str:
     # rest format: "<path>:<VAR_NAME>"
     path_str, _, var_name = rest.rpartition(":")
     if not path_str or not var_name:
         raise AuthError(
-            f"malformed file: key_ref '{rest}' (expected 'file:<path>:<VAR>')"
+            f"malformed file: {label}_ref '{rest}' (expected 'file:<path>:<VAR>')"
         )
     p = Path(path_str).expanduser()
     if not p.is_absolute():
@@ -203,12 +257,14 @@ def _load_from_file(rest: str, profile_name: str) -> str:
     val = values.get(var_name)
     if not val:
         raise AuthError(
-            f"'{var_name}' not set in {p} (profile '{profile_name}')"
+            f"'{var_name}' not set in {p} (profile '{profile_name}', {label})"
         )
     return val
 
 
-def _load_from_dotenv_walk(var_name: str, profile_name: str) -> str:
+def _load_from_dotenv_walk(
+    var_name: str, profile_name: str, *, label: str = "key"
+) -> str:
     """Walk up from CWD looking for `.env`; read `var_name` from it.
 
     This is the agent-safe default: the secret only lives in the repo's
@@ -218,19 +274,19 @@ def _load_from_dotenv_walk(var_name: str, profile_name: str) -> str:
     var_name = var_name.strip()
     if not var_name:
         raise AuthError(
-            f"malformed dotenv: key_ref (expected 'dotenv:<VAR>')"
+            f"malformed dotenv: {label}_ref (expected 'dotenv:<VAR>')"
         )
     found = find_dotenv(usecwd=True)
     if not found:
         raise AuthError(
             f"no .env file found walking up from {Path.cwd()} "
-            f"(profile '{profile_name}')"
+            f"(profile '{profile_name}', {label})"
         )
     values = dotenv_values(found)
     val = values.get(var_name)
     if not val:
         raise AuthError(
-            f"'{var_name}' not set in {found} (profile '{profile_name}')"
+            f"'{var_name}' not set in {found} (profile '{profile_name}', {label})"
         )
     return val
 
