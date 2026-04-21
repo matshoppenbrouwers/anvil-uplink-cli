@@ -6,15 +6,18 @@ from pathlib import Path
 import pytest
 
 from anvil_uplink_cli.config import (
+    DEFAULT_IMPERSONATE_CALLABLE,
     DEFAULT_URL,
     ENV_VAR_KEY,
     Config,
     Profile,
     load_config,
+    resolve_impersonate_secret,
     resolve_key,
+    resolve_secret,
     save_config,
 )
-from anvil_uplink_cli.errors import AuthError, ConfigError
+from anvil_uplink_cli.errors import AuthError, ConfigError, ImpersonationError
 
 
 def test_profile_from_dict_defaults() -> None:
@@ -214,3 +217,75 @@ def test_resolve_key_keyring_empty_raises(monkeypatch: pytest.MonkeyPatch) -> No
     p = Profile(name="x", key_ref="keyring:anvil-bridge/nothing")
     with pytest.raises(AuthError, match="no key stored"):
         resolve_key(p)
+
+
+# --- Impersonation profile fields and resolvers ---------------------------
+
+
+def test_profile_impersonate_fields_default() -> None:
+    p = Profile.from_dict("alpha", {})
+    assert p.impersonate_secret_ref == ""
+    assert p.impersonate_callable == DEFAULT_IMPERSONATE_CALLABLE
+
+
+def test_profile_roundtrip_with_impersonate_fields(tmp_path: Path) -> None:
+    cfg = Config()
+    cfg.set_profile(
+        Profile(
+            name="imp",
+            key_ref="env:K",
+            impersonate_secret_ref="dotenv:SHARED",
+            impersonate_callable="_custom_dispatcher",
+        )
+    )
+    p = tmp_path / "config.toml"
+    save_config(cfg, p)
+    loaded = load_config(p).profiles["imp"]
+    assert loaded.impersonate_secret_ref == "dotenv:SHARED"
+    assert loaded.impersonate_callable == "_custom_dispatcher"
+
+
+def test_profile_elides_defaulted_impersonate_fields_on_save(tmp_path: Path) -> None:
+    # Profiles without impersonation config must not pollute config.toml.
+    cfg = Config()
+    cfg.set_profile(Profile(name="plain", key_ref="env:K"))
+    p = tmp_path / "config.toml"
+    save_config(cfg, p)
+    text = p.read_text(encoding="utf-8")
+    assert "impersonate_secret_ref" not in text
+    assert "impersonate_callable" not in text
+
+
+def test_resolve_secret_dotenv_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    nested = repo / "a" / "b"
+    nested.mkdir(parents=True)
+    (repo / ".env").write_text("SHARED=shh\n")
+    monkeypatch.chdir(nested)
+    assert resolve_secret("dotenv:SHARED", "p", label="impersonate_secret") == "shh"
+
+
+def test_resolve_secret_empty_ref_raises() -> None:
+    with pytest.raises(AuthError, match="no impersonate_secret_ref"):
+        resolve_secret("", "p", label="impersonate_secret")
+
+
+def test_resolve_impersonate_secret_missing_ref_raises() -> None:
+    p = Profile(name="x", key_ref="env:K")  # no impersonate_secret_ref
+    with pytest.raises(ImpersonationError, match="no impersonate_secret_ref"):
+        resolve_impersonate_secret(p)
+
+
+def test_resolve_impersonate_secret_reads_from_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".env").write_text("SHARED=super-secret\n")
+    monkeypatch.chdir(tmp_path)
+    p = Profile(
+        name="x",
+        key_ref="env:K",
+        impersonate_secret_ref="dotenv:SHARED",
+    )
+    assert resolve_impersonate_secret(p) == "super-secret"

@@ -132,7 +132,7 @@ No `--key`. No inline env. No prompt for a secret. The CLI walks up from CWD to 
 |---|---|
 | `init` | Profile wizard, writes `.env` / keyring entry, `.gitignore` hygiene |
 | `doctor` | Verify key, list accessible tables, confirm Server vs Client Uplink |
-| `call <fn> [args]` | Invoke `@anvil.server.callable` and print result |
+| `call <fn> [args]` | Invoke `@anvil.server.callable` and print result. Add `--as-user <email>` for `require_user=True` callables — see [`docs/impersonation.md`](docs/impersonation.md). |
 | `query <table>` | Search a Data Table (`--filter k=v`, `--limit N`) |
 | `tables` | List tables and column schemas |
 | `row <table> <id>` | Fetch a single row by id |
@@ -140,6 +140,17 @@ No `--key`. No inline env. No prompt for a secret. The CLI walks up from CWD to 
 | `repl` | Interactive Python shell with `anvil`, `anvil.server`, `app_tables` live |
 
 All commands accept `--profile <name>` for multi-app use and `--json` for machine-readable output.
+
+## Claude Code skill
+
+A ready-made Claude Code skill ships with the repo at [`skills/anvil-bridge/`](skills/anvil-bridge/SKILL.md). It teaches Claude the agent-safe invocation rules (full path, no inline keys), the `tables`-doesn't-enumerate gotcha, and when to use `run` vs repeated `query` calls.
+
+Install locally:
+```bash
+cp -r skills/anvil-bridge ~/.claude/skills/
+```
+
+Or distribute the packaged artifact: [`skills/dist/anvil-bridge.skill`](skills/dist/anvil-bridge.skill).
 
 ## Security
 
@@ -159,6 +170,14 @@ Key storage backends in order of preference:
 - WSL cannot read Windows Credential Manager — use `dotenv:` if you need both environments.
 
 See [`docs/security.md`](docs/security.md) for full details.
+
+### Calling `require_user=True` functions
+
+> **Skip this section unless your app uses `require_user=True` on callables you need to invoke.** The default install and quickstart above do not require any of what follows — `doctor`, `query`, `row`, `run`, and plain `call` all work without it.
+
+Apps that gate every callable with `require_user=True` can't be driven from an Uplink session out of the box. `anvil-bridge` adds a `--as-user <email>` flag that dispatches through a small server-side helper you drop into your app (`_uplink_run_as`), protected by a shared secret + email allowlist + audit log. See [`docs/impersonation.md`](docs/impersonation.md).
+
+**Status (v0.2.0):** the CLI-side plumbing and unit/smoke tests are green, but the end-to-end flow (CLI → server helper → `force_login` → nested `anvil.server.call` → audit row) has **not** been exercised against a deployed app yet. Treat `--as-user` as provisional until the test app (`formal-valuable-raccoon-dog.anvil.app`) has run the full happy/failure-mode matrix.
 
 ## Status
 

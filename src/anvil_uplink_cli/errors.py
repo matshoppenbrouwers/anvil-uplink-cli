@@ -55,6 +55,7 @@ EXIT_SERVER_RAISED = 30
 EXIT_INTERNAL = 31
 EXIT_AUTH = 40
 EXIT_CONFIG = 41
+EXIT_IMPERSONATION = 42
 
 
 @dataclass(frozen=True)
@@ -111,3 +112,13 @@ class AuthError(RuntimeError):
 
 class ConfigError(RuntimeError):
     """Raised when configuration is malformed or a profile is missing."""
+
+
+class ImpersonationError(RuntimeError):
+    """Raised when CLI-side impersonation setup is invalid.
+
+    Covers the client-side preconditions for --as-user (e.g. the profile
+    has no impersonate_secret_ref). Server-side rejections (bad shared
+    secret, non-allowlisted email, etc.) still surface as AnvilWrappedError
+    and map to EXIT_SERVER_RAISED via map_exception.
+    """

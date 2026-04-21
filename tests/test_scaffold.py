@@ -8,7 +8,7 @@ from anvil_uplink_cli.cli import app
 
 
 def test_version_is_set() -> None:
-    assert __version__ == "0.1.0"
+    assert __version__ == "0.2.0"
 
 
 def test_cli_help_lists_all_commands() -> None:
