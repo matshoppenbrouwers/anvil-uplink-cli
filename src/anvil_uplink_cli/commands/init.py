@@ -32,6 +32,7 @@ from anvil_uplink_cli.config import (
     save_config,
     store_in_keyring,
 )
+from anvil_uplink_cli.errors import ConfigError
 
 _console = Console()
 
@@ -63,7 +64,18 @@ def _ensure_gitignore_entry(gitignore: Path, entry: str = ".env") -> bool:
     return True
 
 
+def _validate_dotenv_value(value: str) -> None:
+    """Reject characters that would corrupt a KEY="value" assignment."""
+    for bad, label in (('"', 'double-quote'), ("\\", "backslash"), ("\n", "newline"), ("\r", "carriage return")):
+        if bad in value:
+            raise ConfigError(
+                f"uplink key contains a {label} character, which cannot be safely stored in a .env file; "
+                "use the keyring backend instead"
+            )
+
+
 def _append_dotenv_var(dotenv: Path, var: str, value: str) -> None:
+    _validate_dotenv_value(value)
     line = f'{var}="{value}"\n'
     if not dotenv.exists():
         dotenv.write_text(line, encoding="utf-8")

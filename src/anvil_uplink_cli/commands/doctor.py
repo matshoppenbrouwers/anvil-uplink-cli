@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 
 from anvil_uplink_cli._runner import run_or_exit
+from anvil_uplink_cli.commands._tables import list_table_names
 from anvil_uplink_cli.config import load_config
 from anvil_uplink_cli.connection import uplink
 from anvil_uplink_cli.errors import PermissionDenied, map_exception
@@ -28,13 +29,6 @@ def run(
     run_or_exit(lambda: _doctor(profile, json_out))
 
 
-def _list_tables() -> list[str]:
-    # Import lazily so the import only runs when we actually have a connection
-    from anvil.tables import app_tables
-
-    return sorted(name for name in dir(app_tables) if not name.startswith("_"))
-
-
 def _doctor(profile_name: str | None, json_out: bool) -> None:
     cfg = load_config()
     prof = cfg.get(profile_name)
@@ -48,7 +42,7 @@ def _doctor(profile_name: str | None, json_out: bool) -> None:
     with uplink(prof):
         report["connected"] = True
         try:
-            tables = _list_tables()
+            tables = list_table_names()
             report["uplink_type"] = "server"
             report["tables"] = tables
         except Exception as e:
@@ -66,8 +60,13 @@ def _doctor(profile_name: str | None, json_out: bool) -> None:
 
     _console.print(f"[bold]profile[/]: {report['profile']}")
     _console.print(f"[bold]url[/]:     {report['url']}")
-    _console.print(f"[bold]connected[/]: [green]yes[/]")
-    _console.print(f"[bold]uplink type[/]: {report['uplink_type']}")
+    uplink_type = report["uplink_type"]
+    if uplink_type == "error":
+        _console.print("[bold]connected[/]: [yellow]partial[/] (connected, but enumeration failed)")
+    else:
+        _console.print("[bold]connected[/]: [green]yes[/]")
+    type_color = {"server": "green", "client": "yellow", "error": "red"}.get(str(uplink_type), "dim")
+    _console.print(f"[bold]uplink type[/]: [{type_color}]{uplink_type}[/]")
     tables = report["tables"]
     if isinstance(tables, list) and tables:
         _console.print(f"[bold]tables ({len(tables)})[/]:")

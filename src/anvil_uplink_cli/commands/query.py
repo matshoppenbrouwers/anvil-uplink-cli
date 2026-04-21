@@ -21,9 +21,9 @@ from rich.table import Table
 
 from anvil_uplink_cli._runner import run_or_exit
 from anvil_uplink_cli.args import coerce_bare
+from anvil_uplink_cli.commands._tables import resolve_table
 from anvil_uplink_cli.config import load_config
 from anvil_uplink_cli.connection import uplink
-from anvil_uplink_cli.errors import ConfigError
 from anvil_uplink_cli.serialize import to_json, to_jsonable
 
 _console = Console()
@@ -79,15 +79,6 @@ def _parse_filters(
     return out
 
 
-def _resolve_table(table_name: str):
-    from anvil.tables import app_tables
-
-    tbl = getattr(app_tables, table_name, None)
-    if tbl is None:
-        raise ConfigError(f"no such Data Table: {table_name!r}")
-    return tbl
-
-
 def _collect_rows(tbl: Any, kwargs: dict[str, Any], limit: int | None) -> list[Any]:
     iterator = tbl.search(**kwargs)
     if limit is None:
@@ -112,7 +103,7 @@ def _query(
     cfg = load_config()
     prof = cfg.get(profile_name)
     with uplink(prof):
-        tbl = _resolve_table(table_name)
+        tbl = resolve_table(table_name)
         rows = _collect_rows(tbl, kwargs, limit)
         # Serialize while the connection is still open — Row is a LiveObject;
         # link columns and lazy Media can trigger additional round-trips.

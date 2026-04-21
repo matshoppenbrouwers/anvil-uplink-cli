@@ -62,14 +62,12 @@ def _call(
         # Serialize inside the connection — callable returns are usually plain,
         # but may contain Row/Media LiveObjects that need the socket open.
         jsonable = to_jsonable(result)
-        serialized = to_json(jsonable)
-        serialized_indent = to_json(jsonable, indent=2)
 
     if json_out:
-        typer.echo(serialized_indent)
+        typer.echo(to_json(jsonable, indent=2))
         return
 
     if jsonable is None or isinstance(jsonable, (bool, int, float, str)):
         _console.print(jsonable)
         return
-    _console.print_json(serialized)
+    _console.print_json(to_json(jsonable))

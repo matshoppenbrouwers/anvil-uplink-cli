@@ -16,6 +16,7 @@ import sys
 from collections.abc import Callable
 from typing import TypeVar
 
+import click
 import typer
 
 from anvil_uplink_cli.errors import (
@@ -50,6 +51,9 @@ def run_or_exit(work: Callable[[], T]) -> T:
         typer.echo(f"usage error: {e}", err=True)
         raise typer.Exit(code=EXIT_USAGE) from e
     except typer.Exit:
+        raise
+    except click.UsageError:
+        # Let Typer/Click's top-level handler render + exit 2.
         raise
     except KeyboardInterrupt:
         typer.echo("interrupted", err=True)

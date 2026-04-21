@@ -167,3 +167,18 @@ def test_run_executes_script(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["run", str(script), "world"])
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "ran world" in result.stdout
+
+
+def test_run_propagates_systemexit(tmp_path, monkeypatch):
+    """H13: script's sys.exit(N) must propagate as the CLI's exit code."""
+    _write_profile(tmp_path, monkeypatch)
+
+    script = tmp_path / "bail.py"
+    script.write_text("import sys\nsys.exit(5)\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "anvil_uplink_cli.commands.run.uplink", _fake_uplink
+    )
+
+    result = CliRunner().invoke(app, ["run", str(script)])
+    assert result.exit_code == 5, result.stdout + result.stderr

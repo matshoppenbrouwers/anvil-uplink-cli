@@ -1,0 +1,30 @@
+=== CLI surface probe @ Tue Apr 21 08:22:22 CEST 2026 ===
+PASS: H1.0 --help exits 0 (exit=0)
+PASS: H1.init command listed in --help
+PASS: H1.doctor command listed in --help
+PASS: H1.call command listed in --help
+PASS: H1.query command listed in --help
+PASS: H1.tables command listed in --help
+PASS: H1.row command listed in --help
+PASS: H1.run command listed in --help
+PASS: H1.repl command listed in --help
+PASS: H12 -h short flag accepted (exit=0)
+PASS: H2.0 --version exits 0 (exit=0)
+PASS: H2.1 --version prints expected string
+PASS: H14 unknown profile exits 41 (ConfigError) (exit=41)
+PASS: H14.1 unknown profile reports 'not found'
+PASS: H11.0 malformed --kwarg exits 2 (EXIT_USAGE) (exit=2)
+PASS: H11.1 malformed --kwarg prefixes 'usage error'
+PASS: H10 init --non-interactive without --profile rejected when profiles exist (exit=2)
+PASS: H13-proxy auth error surfaces before exec (live-exec path deferred) (exit=40)
+=== RESULTS: 18 passed, 0 failed ===
+=== Defect regression + out-of-scope probe @ Tue Apr 21 08:22:32 CEST 2026 ===
+PASS: H8 to_jsonable inside with-uplink in src/anvil_uplink_cli/commands/query.py
+PASS: H8 to_jsonable inside with-uplink in src/anvil_uplink_cli/commands/row.py
+PASS: H8 to_jsonable inside with-uplink in src/anvil_uplink_cli/commands/call.py
+PASS: H9 run.py namespace has 'server' key
+PASS: H15 query._collect_rows has i >= limit guard
+PASS: H16.daemon mode not built
+PASS: H16.MCP server not built
+PASS: H16 no daemon/MCP class in package
+=== RESULTS: 8 passed, 0 failed ===

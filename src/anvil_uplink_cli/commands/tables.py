@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from anvil_uplink_cli._runner import run_or_exit
+from anvil_uplink_cli.commands._tables import list_table_names
 from anvil_uplink_cli.config import load_config
 from anvil_uplink_cli.connection import uplink
 from anvil_uplink_cli.serialize import to_json
@@ -29,7 +30,7 @@ def _collect_schema() -> dict[str, list[dict[str, str]]]:
     from anvil.tables import app_tables
 
     out: dict[str, list[dict[str, str]]] = {}
-    for name in sorted(n for n in dir(app_tables) if not n.startswith("_")):
+    for name in list_table_names():
         tbl = getattr(app_tables, name)
         cols_fn = getattr(tbl, "list_columns", None)
         if not callable(cols_fn):
