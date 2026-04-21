@@ -11,6 +11,7 @@ from anvil_uplink_cli.config import (
     ENV_VAR_KEY,
     Config,
     Profile,
+    SecretStr,
     load_config,
     resolve_impersonate_secret,
     resolve_key,
@@ -166,7 +167,7 @@ def test_resolve_key_dotenv_walk_no_env_found(
     monkeypatch.chdir(empty)
 
     p = Profile(name="x", key_ref="dotenv:ANVIL_UPLINK_KEY")
-    with pytest.raises(AuthError, match="no .env file found"):
+    with pytest.raises(AuthError, match="no .env found"):
         resolve_key(p)
 
 
@@ -289,3 +290,120 @@ def test_resolve_impersonate_secret_reads_from_dotenv(
         impersonate_secret_ref="dotenv:SHARED",
     )
     assert resolve_impersonate_secret(p) == "super-secret"
+
+
+# --- Hardening: impersonate_callable identifier validation ---
+
+
+def test_from_dict_rejects_non_identifier_impersonate_callable() -> None:
+    with pytest.raises(ConfigError, match="invalid impersonate_callable"):
+        Profile.from_dict("x", {"impersonate_callable": "bad name"})
+
+
+def test_from_dict_rejects_dotted_impersonate_callable() -> None:
+    with pytest.raises(ConfigError, match="invalid impersonate_callable"):
+        Profile.from_dict("x", {"impersonate_callable": "pkg.module.fn"})
+
+
+def test_from_dict_accepts_valid_identifier() -> None:
+    p = Profile.from_dict("x", {"impersonate_callable": "_my_shim2"})
+    assert p.impersonate_callable == "_my_shim2"
+
+
+def test_load_config_surfaces_invalid_impersonate_callable(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[profiles.x]\nkey_ref = "env:K"\nimpersonate_callable = "bad name"\n'
+    )
+    with pytest.raises(ConfigError, match="invalid impersonate_callable"):
+        load_config(cfg)
+
+
+# --- Hardening: dotenv-walk repo-root boundary ---
+
+
+def test_dotenv_walk_stops_at_pyproject_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    # .env exists only ABOVE the repo marker — must NOT be read.
+    (tmp_path / ".env").write_text("ANVIL_UPLINK_KEY=poisoned\n")
+    repo = tmp_path / "repo"
+    nested = repo / "sub"
+    nested.mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("[tool.x]\n")
+    monkeypatch.chdir(nested)
+
+    p = Profile(name="x", key_ref="dotenv:ANVIL_UPLINK_KEY")
+    with pytest.raises(AuthError, match="within the project boundary"):
+        resolve_key(p)
+
+
+def test_dotenv_walk_stops_at_git_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    (tmp_path / ".env").write_text("ANVIL_UPLINK_KEY=poisoned\n")
+    repo = tmp_path / "repo"
+    nested = repo / "sub"
+    nested.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    monkeypatch.chdir(nested)
+
+    p = Profile(name="x", key_ref="dotenv:ANVIL_UPLINK_KEY")
+    with pytest.raises(AuthError, match="within the project boundary"):
+        resolve_key(p)
+
+
+def test_dotenv_walk_finds_env_inside_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    repo = tmp_path / "repo"
+    nested = repo / "sub"
+    nested.mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("[tool.x]\n")
+    (repo / ".env").write_text("ANVIL_UPLINK_KEY=correct\n")
+    monkeypatch.chdir(nested)
+
+    p = Profile(name="x", key_ref="dotenv:ANVIL_UPLINK_KEY")
+    assert resolve_key(p) == "correct"
+
+
+# --- Hardening: SecretStr masks repr ---
+
+
+def test_secretstr_repr_masks_value() -> None:
+    s = SecretStr("actual-secret-abc123")
+    assert repr(s) == "'***'"
+    assert str(s) == "actual-secret-abc123"
+    assert s == "actual-secret-abc123"
+
+
+def test_secretstr_empty_repr() -> None:
+    assert repr(SecretStr("")) == "''"
+
+
+def test_resolve_key_returns_secretstr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("K_VAR", "the-key")
+    monkeypatch.delenv(ENV_VAR_KEY, raising=False)
+    p = Profile(name="x", key_ref="env:K_VAR")
+    val = resolve_key(p)
+    assert isinstance(val, SecretStr)
+    assert "the-key" not in repr(val)
+
+
+def test_resolve_impersonate_secret_returns_secretstr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".env").write_text("SHARED=shh\n")
+    (tmp_path / "pyproject.toml").write_text("[tool.x]\n")
+    monkeypatch.chdir(tmp_path)
+    p = Profile(
+        name="x", key_ref="env:K", impersonate_secret_ref="dotenv:SHARED"
+    )
+    val = resolve_impersonate_secret(p)
+    assert isinstance(val, SecretStr)
+    assert "shh" not in repr(val)
